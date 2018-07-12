@@ -1,0 +1,248 @@
+---
+title: 'Prob 3, CP2: Agrupamento de mais dados em mais dimensões'
+author: "Thierry Barros"
+date: "June 29, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+suppressWarnings(library(tidyverse))
+library(tidyverse)
+library(lubridate)
+library(viridis)
+require(GGally, quietly = TRUE)
+require(reshape2, quietly = TRUE)
+require(tidyverse, quietly = TRUE, warn.conflicts = FALSE)
+library(ggfortify)
+library(cluster)
+library(ggdendro)
+library(broom)
+
+theme_set(theme_bw())
+
+library(DT)
+```
+
+
+Lendo os dados sobre os departamentos da UFCG disponíveis:
+```{r}
+ufus = read_csv("ufcg-201704-sumario-UAs-wide.csv",
+                            col_types = cols(
+                                UORG_LOTACAO = col_character(),
+                                Outro = col_double(),
+                                `Professor 20h` = col_double(),
+                                `Professor 40h ou DE` = col_double(),
+                                idade_25perc = col_double(),
+                                idade_mediana = col_double(),
+                                idade_75perc = col_double()
+                            )
+)
+```
+
+
+Tratando algumas variáveis e selecionando outras. Colunas que tem espaços no nome dão problemas no k-means, decidi usar só uma medida de idade que foi a idade_mediana. Além disso criri todos os pares de correlação para analisar as variáveis. A análise será feita baseada nos dados dos departamentos e analisando 4 variáveis(Outro,Professor 20h,Professor 40h ou DE,idade_mediana). Agrupamento com 4 variáveis.
+```{r}
+
+names(ufus)[3:4] <- c("Professor20","Professor40")
+
+ufus = ufus[c("UORG_LOTACAO","Professor20","Professor40","idade_mediana","Outro")]
+
+summary(ufus)
+
+ufus %>% 
+    select(-UORG_LOTACAO) %>% 
+    ggpairs()
+
+```
+
+Abaixo analisamos a variável `Professor 20h` que parece ter uma grande concetração dos danos em uma pequena faixa de valores, com execeção de dois outliers, a outras variáveis estão mais distruídas, mas nenhuma tem grande correlação com as outras.
+```{r}
+ufus %>% 
+    ggplot(aes(x = "Professor20", y = Professor20)) + 
+    geom_jitter(width = .01, height = 0, size = 2, alpha = .6)
+ufus %>%
+    ggplot(aes(x = Professor20)) +
+    geom_histogram(bins = 15,
+                   boundary = 0,
+                   fill = "#95CFB7",
+                   color = "black") + 
+    geom_rug()
+```
+
+Como uma  variável é bastante assimétrica e concentrada em pequenos valores. Transformá-las para log pode ajuda na visualização. Nesse caso não ajudou muito na visualização.
+
+```{r}
+
+
+ufus.scaled = ufus %>% 
+  mutate_each(funs(as.vector(scale(.))), 2:5)
+
+summary(ufus.scaled)
+
+ufus.scaled %>% 
+    select(-UORG_LOTACAO) %>% 
+    ggpairs()
+```
+
+Escolhí usar a função hclust, que faz uma clusterização hierarquica dos valores, o método escolhido foi o ward.D2. Pelo plot podemos ver que parece ter 3 grupos nesse cunjunto de dados.
+
+```{r}
+dists = ufus.scaled %>% 
+    as.data.frame() %>% 
+    column_to_rownames("UORG_LOTACAO") %>% 
+    dist(method = "euclidean")
+
+hc = hclust(dists, method = "ward.D2")
+
+plot(hc, cex = .6)
+
+n_clusters = 3
+
+rect.hclust(hc, k=n_clusters)
+
+ufus <- ufus %>% 
+    mutate(cluster = hc %>% 
+               cutree(k = n_clusters) %>% 
+               as.character())
+
+ufus.scaled <- ufus.scaled %>% 
+    mutate(cluster = hc %>% 
+               cutree(k = n_clusters) %>% 
+               as.character())
+
+ufus.long = melt(ufus.scaled, id.vars = c("UORG_LOTACAO", "cluster"))
+
+hc %>% 
+    cutree(k = n_clusters) %>% 
+    silhouette(dists) %>% 
+    plot(col = RColorBrewer::brewer.pal(n_clusters, "Set2"))
+
+ufus.long %>% 
+    ggplot(aes(x = variable, y = value, group = UORG_LOTACAO, colour = cluster)) + 
+    geom_line(alpha = 0.4) + 
+    facet_wrap(~ cluster) 
+
+```
+##Fazendo o agrupamento dos dados
+
+Rodando  o método de agrupamento k-means podemos ver quais análises ficaram em cada um dos 3 grupos. Cada execução do k-means pode gerar uma divisão dos dados distintas.
+
+
+##K-means
+```{r}
+#Remove a coluna cluster
+ufus.scaled = ufus.scaled %>% 
+    select(-cluster)
+
+# O agrupamento
+km = ufus.scaled %>% 
+    select(-UORG_LOTACAO) %>% 
+    kmeans(centers = n_clusters, 20)
+
+
+ufus.scaled.km.long = km %>% 
+    augment(ufus.scaled) %>% 
+    gather(key = "variável", 
+           value = "valor", 
+           -UORG_LOTACAO, -.cluster) 
+
+ufus.scaled.km.long %>% 
+    ggplot(aes(x = `variável`, y = valor, group = UORG_LOTACAO, colour = .cluster)) + 
+    #geom_point(alpha = 0.2) + 
+    geom_line(alpha = .5) + 
+    facet_wrap(~ .cluster) 
+
+autoplot(km, data = ufus.scaled, label = TRUE)
+
+dists = ufus.scaled %>% 
+    select(-UORG_LOTACAO) %>% 
+    dist() # só para plotar silhouetas depois
+plot(silhouette(km$cluster, dists), col = RColorBrewer::brewer.pal(n_clusters, "Set2"))
+
+table(km$cluster)
+
+
+```
+
+
+
+##Um bom valor de k:
+
+#Há medida usada foi o  GAP statistic é uma medida robusta.
+
+A GAP compara a solução do agrupamento com cada k com a solução em um dataset onde não há estrutura de grupos. Como podemos ver no gráfico abaixo até k=3 o valor se matém proximo e baixo, a partir do k>4 ele começa a crescer muito. Então o número de grupos que deve ser escolhido é k=3.
+
+```{r}
+plot_clusgap = function(clusgap, title="Gap Statistic calculation results"){
+    require("ggplot2")
+    gstab = data.frame(clusgap$Tab, k=1:nrow(clusgap$Tab))
+    p = ggplot(gstab, aes(k, gap)) + geom_line() + geom_point(size=5)
+    p = p + geom_errorbar(aes(ymax=gap+SE.sim, ymin=gap-SE.sim), width = .2)
+    p = p + ggtitle(title)
+    return(p)
+}
+
+gaps <- ufus.scaled %>% 
+    select(-UORG_LOTACAO) %>% 
+    clusGap(FUN = kmeans, nstart = 20, K.max = 15, B = 200)
+plot_clusgap(gaps)
+
+
+```
+
+# Between/totss
+
+Outro modo de que é  comumente usada no kmeans é comparar a distância (quadrática) entre o centro dos clusters e o centro dos dados com a distância (quadrática) entre os pontos todos nos dados e o centro dos dados. Essa proporção pode ser usada para definir um bom valor de `k`. Quando ela para de crescer, para de valer à pena aumentar `k`. Nesse outra medida, diferente da primeira, parece que o ideal para k seria 5, pois é quando o somatório para de crescer em uma boa proporção. Vamos continuar com k = 3 pois a primeira medida é mais robusta.
+
+```{r}
+set.seed(123)
+explorando_k = tibble(k = 1:12) %>% 
+    group_by(k) %>% 
+    do(
+        kmeans(select(ufus.scaled, -UORG_LOTACAO), 
+               centers = .$k, 
+               nstart = 20) %>% glance()
+    )
+
+explorando_k %>% 
+    ggplot(aes(x = k, y = betweenss / totss)) + 
+    geom_line() + 
+    geom_point()
+```
+
+#Tomando como base 3 grupos podemos nomea-los e descreve-los:
+
+
+
+
+1º grupo e o menor com apenas duas observações é o grupo de medicina com professores de 20h: Parece que esses professores que só trabalham 20h, devem provavelmente possuir outros empregos em clínicas ou fazendo plantão em hospitais. Esse grupo se diferencia muito dos outros pelo quantidade de professores que só trabalham 20h semanais.
+
+```{r}
+ggplot(aes(x=Professor20, fill=cluster), data=ufus) + 
+    geom_histogram() + xlab("Qauntidade de Professores que trabalham 20 horas")
+```
+
+
+
+2º grupo é o grupo de professores trabalhadores: A maioria pertence a despartamentos de engenharias, e enganharia não é fácil pra ninguém, até os professores em sua maioria se dedica em tempo integral ao trabalho, 40 horas semanais a maioria dos departamentos não tem nenhum professor com 20 horas semanais de trabalho, além disso a idade deles é bem maior que a dos outros grupos, trabalhar até morrer, parece que eles levaram a sério isso.
+
+```{r}
+ggplot(aes(x=idade_mediana, fill=cluster), data=ufus) + 
+    geom_histogram() + xlab("Log da Idade mediana dos professores")
+```
+
+
+3ºgrupo é os jovens trabalhadores: O maior grupo e também o grupo mais variado possuindo diversos departamentos, das três área(humanas, exatas e saúde). Esse grupo se caracteriza por ter professores que trabalham 40 horas em sua maioria e por uma baixa idade desses professores, a maioria é jovem, a mediana da idade fica bem abaixo do grupo 2.
+
+A partir do agrupamento, deu pra perceber diversas características interessantes das observações e uma similidade entre elas.
+
+
+
+
+
+
+

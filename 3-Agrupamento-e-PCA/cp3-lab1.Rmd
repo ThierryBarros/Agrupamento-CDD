@@ -1,0 +1,264 @@
+---
+title: "Prob 3, CP1 - Agrupamento com 2 dimensões"
+author: "Thierry Barros"
+date: "June 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r load_code, message=FALSE, warning=FALSE}
+library(tidyverse, warn.conflicts = F)
+library(rvest)
+library(plotly)
+library(cluster)
+library(ggdendro)
+library(gridExtra)
+theme_set(theme_light())
+source("plota_solucoes_hclust.R")
+```
+#A atriz a ser analisada será Meryl Streep.
+```{r}
+from_page <- read_html("https://www.rottentomatoes.com/celebrity/meryl_streep/") %>% 
+    html_node("#filmographyTbl") %>%
+    html_table(fill=TRUE) %>% # Faz parse
+    as.tibble()
+
+filmes = from_page %>% 
+    filter(RATING != "No Score Yet", 
+           `BOX OFFICE` != "—", 
+           CREDIT != "Executive Producer") %>%
+    mutate(RATING = as.numeric(gsub("%", "", RATING)), 
+           `BOX OFFICE` = as.numeric(gsub("[$|M]", "", `BOX OFFICE`))) %>% 
+    filter(`BOX OFFICE` >= 1)
+```
+
+Analisando a distribuição os dados de acordo com Rating(Avaliação) dos filmes. O primeiro gráfico mostra a distribuição de notas em uma distribuição horizontal e a segunda mostra a distruição em um histograma com 10 barras. Podemos ver que em ambas a maioria dos filmes tem avaliação entre 60 e 80. Uma avaliação boa em compração com outra atores como brad pitt.
+```{r}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = RATING)) + 
+    geom_jitter(width = .01, height = 0, size = 2, alpha = .6)
+
+filmes %>%
+    ggplot(aes(x = RATING)) +
+    geom_histogram(bins = 10,
+                   boundary = 0,
+                   fill = "#95CFB7",
+                   color = "black") + 
+    geom_rug()
+```
+
+Agora analisando a distribuição de filmes por ano de lançamento, ela teve muitos filmes(11) produzidos entre 2005 e 2009, mais de 2 filmes por ano.
+```{r}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = YEAR)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) 
+
+
+```
+
+Também por ano podemos ver o número de filmes produzidos em cada ano. Os anos que mais tiverem filmes estrelados por ela foram 2007,2009 e 2012. nota-se também que entre 2010 e 2011 ela não participou de nenhum filme, ou participou mas levou mais tempo para ser lançado.
+```{r}
+filmes %>% 
+    ggplot(aes(x = `YEAR`)) + 
+    geom_histogram(bins = 17, 
+                   fill = "#FFF7BD",
+                   color = "black") + 
+    geom_rug()
+
+```
+
+Podemos também analisar como se da a relação entre as distribuições de Ano de lançamento(coordenada x), Avaliação(coordenada y) e bilheteria(tamanho dos pontos). Naõ parece exisitir forte relação entre nenhuma das três variáveis. Existem filmes bom ótima bilheria mas avaliações médias, filmes com ótimas avaliações mais bilheteria média e filmes com baixas avaliações e baixa bilheteria.
+```{r}
+library(ggplot2)
+library(plotly)
+
+plot_ly(filmes, x = filmes$YEAR, y = filmes$RATING, 
+        mode = "markers", color = filmes$YEAR, size = filmes$`BOX OFFICE`)
+```
+
+Utilizando o método centroid. Pela dissimilaridade parece haver 3 grupos de filmes. Acima disso a dissimilaridade cresce muito.
+Agrupamentos dos filmes apenas pela avaliacao dos mesmos.
+```{r}
+row.names(filmes) = NULL
+
+agrupamento_h = filmes %>% 
+    mutate(TITLE = paste(TITLE, RATING, sep = "-")) %>% 
+    column_to_rownames("TITLE") %>% 
+    select(RATING) %>%
+    dist(method = "euclidian") %>% 
+    hclust(method = "centroid")
+
+ggdendrogram(agrupamento_h, rotate = T, size = 2, theme_dendro = F) + 
+    labs(y = "Dissimilaridade")
+```
+
+Utilizando método ward.D2. Pela dissimilaridade parecem haver 4 grupos de filmes.
+```{r}
+row.names(filmes) = NULL
+
+agrupamento_h = filmes %>% 
+    mutate(TITLE = paste(TITLE, RATING, sep = "-")) %>% 
+    column_to_rownames("TITLE") %>%
+    select(RATING) %>%
+    dist(method = "euclidian") %>% 
+    hclust(method = "ward.D2")
+
+ggdendrogram(agrupamento_h, rotate = T, size = 2, theme_dendro = F) + 
+    labs(y = "Dissimilaridade")
+```
+
+Analisando a dissmilaridade pela aglorameração, até 3 grupos a dissimilaridade se mantém em um nível aceitávels, após isso ela cresce. Sempre tendo em mente que isso é muito subjetivo.
+```{r}
+tibble(alturas_dendrograma = agrupamento_h$height) %>% 
+    mutate(k = 1:n()) %>% 
+    ggplot(aes(x = k, y = alturas_dendrograma)) + 
+    geom_line(colour = "grey") + 
+    geom_point() + 
+    labs(x = "Junções feitas (34 - clusters)", 
+         y = "Dissimilaridade na junção", 
+         title = "Dissimilaridade em cada aglomeração")
+```
+
+Podemos também analisar quanto foi o aumento de dissimilaridade por junção. Como podemos ver nem sempre é algo linear. O aumento começou a ficar considerável a partir da junção de 5 grupos em 4, mas a disparidade é em 3 grupos para 2.
+```{r}
+tibble(alturas_dendrograma = agrupamento_h$height) %>% 
+    mutate(k = 1:n(), 
+           delta = alturas_dendrograma - lag(alturas_dendrograma, default = 0)) %>% 
+    ggplot(aes(x = k, y = delta)) + 
+    geom_col(width = .1) + 
+    geom_point() + 
+    labs(x = "Junções feitas (34 - clusters)", 
+         y = "Junção atual - Junção anterior", 
+         title = "Quão mais dissimilar foi a junção n comparada com n-1")
+```
+
+Agrupando pelo Rating(avaliação) e pelo método centroid. Seis plots de grupos.
+```{r warning=FALSE}
+plota_hclusts_1d(filmes, 
+                 "RATING", 
+                 linkage_method = "centroid",
+                 ks = 1:6)
+```
+
+
+Agrupando pelo Box Office(Bilheteria) e pelo método centroid. Seis plots de grupos.
+
+```{r}
+plota_hclusts_1d(filmes, "`BOX OFFICE`", linkage_method = "centroid", ks = 1:6)
+
+filmes %>% mutate(`BOX OFFICE` = log(`BOX OFFICE`)) %>% 
+    plota_hclusts_1d("`BOX OFFICE`", linkage_method = "centroid", ks = 1:6) + 
+    scale_y_log10()
+```
+
+## Agrupamento com duas variáveis Rating e Box Office.
+
+Primeiro analisar a relação entre essas duas variáveis. Não parece ter forte relação. A distribuição é aleatória e mais concentrada em certos pontos. Formando grupos que parecem fazer mais sentido, certos pontos tem alta avaliação mas bilheteria média/baixa, enquanto outros tem alta bilheteria mas avaliação média e por assim vai.
+```{r}
+
+
+plot_ly(filmes, x = filmes$RATING, y = filmes$`BOX OFFICE`, 
+     mode = "markers", color = filmes$YEAR, size = filmes$RATING) 
+
+```
+
+Pelo método centroid a dissimilarização começa a crescer muito após a junção de 3 grupos em 2. o ideal parece está entre 3 ou 4 grupos.
+
+```{r}
+agrupamento_h_2d = filmes %>% 
+    as.data.frame() %>% 
+    mutate(TITLE = paste(TITLE, RATING, sep = "-")) %>% 
+    column_to_rownames("TITLE") %>% # hclust precisa dos rótulos em nomes de linha (ruim)
+    select(RATING, `BOX OFFICE`) %>%
+    dist(method = "euclidean") %>% 
+    hclust(method = "centroid")
+
+ggdendrogram(agrupamento_h_2d, rotate = TRUE, theme_dendro = F)
+
+
+
+data.frame(height = agrupamento_h_2d$height) %>% 
+    mutate(k = 1:n()) %>% 
+    ggplot(aes(x = k, y = height)) + 
+    geom_line(colour = "grey") + 
+    geom_point() + 
+    labs(x = "Número de clusters produzido", y = "Dissimilaridade na junção")
+
+```
+
+A distinção de grupos no agrupamento está acontecendo toda em função de BOX OFFICE, apenas. Como as escalas são diferentes, BOX OFFICE domina qualquer cálculo de distância euclidiana. Normalizar os valores de Box office. Podemos ver abaixo a mudança que causa na dissimilarização a normalização da variável box oficce, agora o filmes passam a ter junções um pouco diferentes e formam-se grupos novos. Mais o número de grupos ainda parece ser o mesmo(3 ou 4).
+
+```{r}
+agrupamento_h_2d = filmes %>% 
+    mutate_at(vars(RATING, `BOX OFFICE`), 
+              funs(scale)) %>% 
+    as.data.frame() %>% 
+    column_to_rownames("TITLE") %>%
+    select(RATING, `BOX OFFICE`) %>%
+    dist(method = "euclidean") %>% 
+    hclust(method = "centroid")
+
+ggdendrogram(agrupamento_h_2d, rotate = TRUE, theme_dendro = F)
+
+plota_hclusts_2d(agrupamento_h_2d, 
+                 filmes, 
+                 c("RATING", "`BOX OFFICE`"), 
+                 linkage_method = "ward.D", ks = 1:6) 
+
+data.frame(height = agrupamento_h_2d$height) %>% 
+    mutate(k = 1:n()) %>% 
+    ggplot(aes(x = k, y = height)) + 
+    geom_line(colour = "grey") + 
+    geom_point() + 
+    labs(x = "Número de clusters produzido", y = "Dissimilaridade na junção")
+
+```
+
+Utilizando a escala log para normalizar a variável box office. Assim ela não domina mais o agrupamento. 
+
+```{r}
+agrupamento_h_2d = filmes %>% 
+    mutate(`BOX OFFICE` = log10(`BOX OFFICE`)) %>%
+    mutate_at(vars(RATING, `BOX OFFICE`), funs(scale)) %>%
+    as.data.frame() %>% 
+    column_to_rownames("TITLE") %>%
+    select(RATING, `BOX OFFICE`) %>%
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D")
+
+ggdendrogram(agrupamento_h_2d, rotate = TRUE, theme_dendro = F)
+
+filmes2 = filmes %>% mutate(`BOX OFFICE` = log10(`BOX OFFICE`))
+plota_hclusts_2d(agrupamento_h_2d, 
+                 filmes2, 
+                 c("RATING", "`BOX OFFICE`"), 
+                 linkage_method = "ward.D", ks = 1:6) + 
+    scale_y_log10() + 
+    scale_color_brewer(palette = "Dark2")
+
+```
+
+
+#Queremos saber, para cada grupo na combinação final que você escolheu: 
+
+##(1) qual o nome do grupo e porque:
+
+Escolhi 3 grupos. O primeiro são os fracassos(circulos em laranja), filmes com baixa bilheteria e baixa avaliação, não foram bons e nenhum dos dois quisitos.
+O segundo os filmes cult, que são filmes com ótima avaliação, mas que não alcançaram uma boa bilheteria. O terceiro grupo são filmes modinhas, que são filmes com ótima bilheteria mas que não alcançaram uma boa avaliação, geralmente são filmes para passar o tempo, com muita ação mas não muita qualidade.
+
+##(2) exemplos de filmes que você conhece nesse grupo que se encaixam na descrição/nome que você deu ao grupo.
+
+No primeiro grupo um filme que eu conheço é Evening, tinha tudo para ser uma ótima adaptação, mas como foi mal dirigido ele acabou se tornando mórbido e intediante, se tornando um grande fracasso de bilheteria.
+
+No segundo grupo um filme que eu conheço e representa muito o nome do grupo é The Manchurian Candidate, ele teve uma ótimo enredo e uma grande aclamação pela crítica especializada, mas não atraiu o público é mais pra quem gosta da temática de guerra. É um remake do filme de 1964, e conta a história pós guerra do golfo.
+
+No terceiro grupo um filme que se encaixa bem é The Devil Wears Prada(O diabo veste prada) muito popular na época que lançou e até atualmente, mas não conseguiu boa avaliação com os críticos de cinema.
+
+
+
+
+
